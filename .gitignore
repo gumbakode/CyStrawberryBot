@@ -1,0 +1,9 @@
+venv/
+.env
+__pycache__/
+*.pyc
+.DS_Store
+state.json
+subscribers.json
+CLAUDE.md
+.claude/
