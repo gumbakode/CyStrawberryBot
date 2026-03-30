@@ -17,10 +17,19 @@ Telegram bot that monitors [Pittalis Strawberries](https://pittalisstrawberries.
    ```
    cp .env.example .env
    ```
-3. Run the bot:
-   ```bash
-   ./start.sh
-   ```
+
+### Docker (recommended)
+
+```bash
+mkdir data
+docker compose up -d
+```
+
+### Manual
+
+```bash
+./start.sh
+```
 
 ## Configuration
 
