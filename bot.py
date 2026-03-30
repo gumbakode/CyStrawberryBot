@@ -27,8 +27,9 @@ ACTIVE_HOURS_END = int(os.getenv("ACTIVE_HOURS_END", "21"))
 API_URL = "https://api.pittalisstrawberries.com/api/venting-machine"
 API_BEARER = os.getenv("API_BEARER", "")
 
-SUBSCRIBERS_FILE = Path("subscribers.json")
-STATE_FILE = Path("state.json")
+DATA_DIR = Path(os.getenv("DATA_DIR", "."))
+SUBSCRIBERS_FILE = DATA_DIR / "subscribers.json"
+STATE_FILE = DATA_DIR / "state.json"
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
