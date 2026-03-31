@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time as _time
 from datetime import datetime, time
 from pathlib import Path
 
@@ -23,6 +24,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
 ACTIVE_HOURS_START = int(os.getenv("ACTIVE_HOURS_START", "5"))
 ACTIVE_HOURS_END = int(os.getenv("ACTIVE_HOURS_END", "21"))
+CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "60"))
 
 API_URL = "https://api.pittalisstrawberries.com/api/venting-machine"
 API_BEARER = os.getenv("API_BEARER", "")
@@ -55,7 +57,14 @@ def save_json(path: Path, data):
 
 # --- API ---
 
-def fetch_kiosks() -> list[dict]:
+_kiosk_cache: dict = {"data": None, "ts": 0.0}
+
+
+def fetch_kiosks(force: bool = False) -> list[dict]:
+    now = _time.monotonic()
+    if not force and _kiosk_cache["data"] is not None and now - _kiosk_cache["ts"] < CACHE_TTL:
+        return _kiosk_cache["data"]
+
     resp = requests.get(
         API_URL,
         headers={
@@ -66,7 +75,27 @@ def fetch_kiosks() -> list[dict]:
     )
     resp.raise_for_status()
     hidden = {"", "Unknown Device", "H", "Zakaki"}
-    return [k for k in resp.json()["api_response"] if k["deviceName"].strip() not in hidden]
+    result = [k for k in resp.json()["api_response"] if k["deviceName"].strip() not in hidden]
+    _kiosk_cache["data"] = result
+    _kiosk_cache["ts"] = now
+    return result
+
+
+def get_kiosks_from_state() -> list[dict]:
+    """Get kiosk list from state.json (updated by background polling).
+    Falls back to fetch_kiosks() if state.json is empty (first run)."""
+    state = load_json(STATE_FILE, {})
+    if not state:
+        return fetch_kiosks()
+    return [
+        {
+            "deviceCode": code,
+            "deviceName": info["name"],
+            "total_stock": info["stock"],
+            "isOnline": info["online"],
+        }
+        for code, info in state.items()
+    ]
 
 
 # --- Time check ---
@@ -169,32 +198,24 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
-    try:
-        kiosks = fetch_kiosks()
-        await update.message.reply_text(
-            "Select kiosks to subscribe to:",
-            reply_markup=build_subscribe_keyboard(kiosks, chat_id),
-        )
-    except Exception as e:
-        logger.error("Error fetching kiosks for /subscribe: %s", e)
-        await update.message.reply_text("⚠️ Failed to fetch kiosks. Try again later.")
+    kiosks = get_kiosks_from_state()
+    await update.message.reply_text(
+        "Select kiosks to subscribe to:",
+        reply_markup=build_subscribe_keyboard(kiosks, chat_id),
+    )
 
 
 async def cmd_unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
-    try:
-        kiosks = fetch_kiosks()
-        subs = get_subs()
-        if chat_id not in subs or not subs[chat_id]:
-            await update.message.reply_text("You are not subscribed to any kiosks.")
-            return
-        await update.message.reply_text(
-            "Select kiosks to unsubscribe from:",
-            reply_markup=build_unsubscribe_keyboard(kiosks, chat_id),
-        )
-    except Exception as e:
-        logger.error("Error fetching kiosks for /unsubscribe: %s", e)
-        await update.message.reply_text("⚠️ Failed to fetch kiosks. Try again later.")
+    subs = get_subs()
+    if chat_id not in subs or not subs[chat_id]:
+        await update.message.reply_text("You are not subscribed to any kiosks.")
+        return
+    kiosks = get_kiosks_from_state()
+    await update.message.reply_text(
+        "Select kiosks to unsubscribe from:",
+        reply_markup=build_unsubscribe_keyboard(kiosks, chat_id),
+    )
 
 
 # --- Inline button handler ---
@@ -223,14 +244,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "sub_menu":
         await query.answer()
-        try:
-            kiosks = fetch_kiosks()
-            await query.edit_message_text(
-                "Select kiosks to subscribe to:",
-                reply_markup=build_subscribe_keyboard(kiosks, chat_id),
-            )
-        except Exception as e:
-            await query.answer("⚠️ Failed to load kiosks.", show_alert=True)
+        kiosks = get_kiosks_from_state()
+        await query.edit_message_text(
+            "Select kiosks to subscribe to:",
+            reply_markup=build_subscribe_keyboard(kiosks, chat_id),
+        )
 
     elif query.data == "unsub_menu":
         await query.answer()
@@ -238,14 +256,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if chat_id not in subs or not subs[chat_id]:
             await query.answer("You are not subscribed to any kiosks.", show_alert=True)
             return
-        try:
-            kiosks = fetch_kiosks()
-            await query.edit_message_text(
-                "Select kiosks to unsubscribe from:",
-                reply_markup=build_unsubscribe_keyboard(kiosks, chat_id),
-            )
-        except Exception as e:
-            await query.answer("⚠️ Failed to load kiosks.", show_alert=True)
+        kiosks = get_kiosks_from_state()
+        await query.edit_message_text(
+            "Select kiosks to unsubscribe from:",
+            reply_markup=build_unsubscribe_keyboard(kiosks, chat_id),
+        )
 
     elif query.data.startswith("sub:"):
         code = query.data[4:]
@@ -269,13 +284,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         save_json(SUBSCRIBERS_FILE, subs)
         await query.answer("✅ Subscribed!")
-        try:
-            kiosks = fetch_kiosks()
-            await query.edit_message_reply_markup(
-                reply_markup=build_subscribe_keyboard(kiosks, chat_id),
-            )
-        except Exception:
-            pass
+        kiosks = get_kiosks_from_state()
+        await query.edit_message_reply_markup(
+            reply_markup=build_subscribe_keyboard(kiosks, chat_id),
+        )
 
     elif query.data.startswith("unsub:"):
         code = query.data[6:]
@@ -295,13 +307,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             if "all" in user_kiosks:
                 # switching from "all" to specific: subscribe to everything except this one
-                try:
-                    kiosks = fetch_kiosks()
-                    all_codes = [str(k["deviceCode"]) for k in kiosks]
-                    user_kiosks = [c for c in all_codes if c != code]
-                except Exception:
-                    await query.answer("⚠️ Failed to fetch kiosks", show_alert=True)
-                    return
+                kiosks = get_kiosks_from_state()
+                all_codes = [str(k["deviceCode"]) for k in kiosks]
+                user_kiosks = [c for c in all_codes if c != code]
             else:
                 if code in user_kiosks:
                     user_kiosks.remove(code)
@@ -313,20 +321,17 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         save_json(SUBSCRIBERS_FILE, subs)
         await query.answer("❌ Unsubscribed!")
-        try:
-            kiosks = fetch_kiosks()
-            if chat_id in subs and subs[chat_id]:
-                await query.edit_message_reply_markup(
-                    reply_markup=build_unsubscribe_keyboard(kiosks, chat_id),
-                )
-            else:
-                await query.edit_message_text(
-                    "🍓 *Pittalis Strawberries Bot*\n\nChoose an option:",
-                    parse_mode="Markdown",
-                    reply_markup=main_menu_keyboard(),
-                )
-        except Exception:
-            pass
+        if chat_id in subs and subs[chat_id]:
+            kiosks = get_kiosks_from_state()
+            await query.edit_message_reply_markup(
+                reply_markup=build_unsubscribe_keyboard(kiosks, chat_id),
+            )
+        else:
+            await query.edit_message_text(
+                "🍓 *Pittalis Strawberries Bot*\n\nChoose an option:",
+                parse_mode="Markdown",
+                reply_markup=main_menu_keyboard(),
+            )
 
 
 # --- Unknown message handler ---
@@ -349,7 +354,7 @@ async def poll_and_notify(context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        kiosks = fetch_kiosks()
+        kiosks = fetch_kiosks(force=True)
     except Exception as e:
         logger.error("Error fetching kiosks in background job: %s", e)
         return
