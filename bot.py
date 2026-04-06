@@ -32,6 +32,7 @@ API_BEARER = os.getenv("API_BEARER", "")
 DATA_DIR = Path(os.getenv("DATA_DIR", "."))
 SUBSCRIBERS_FILE = DATA_DIR / "subscribers.json"
 STATE_FILE = DATA_DIR / "state.json"
+KIOSK_NAMES_FILE = Path(__file__).parent / "kiosk_names.json"
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -55,6 +56,9 @@ def save_json(path: Path, data):
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+KIOSK_NAMES: dict[str, str] = load_json(KIOSK_NAMES_FILE, {})
+
+
 # --- API ---
 
 _kiosk_cache: dict = {"data": None, "ts": 0.0}
@@ -74,8 +78,15 @@ def fetch_kiosks(force: bool = False) -> list[dict]:
         timeout=15,
     )
     resp.raise_for_status()
-    hidden = {"", "Unknown Device", "H", "Zakaki"}
-    result = [k for k in resp.json()["api_response"] if k["deviceName"].strip() not in hidden]
+    hidden = {"", "Unknown Device", "H"}
+    result = []
+    for k in resp.json()["api_response"]:
+        if k["deviceName"].strip() in hidden:
+            continue
+        code = str(k["deviceCode"])
+        if code in KIOSK_NAMES:
+            k["deviceName"] = KIOSK_NAMES[code]
+        result.append(k)
     _kiosk_cache["data"] = result
     _kiosk_cache["ts"] = now
     return result
