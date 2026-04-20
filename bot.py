@@ -33,6 +33,7 @@ DATA_DIR = Path(os.getenv("DATA_DIR", "."))
 SUBSCRIBERS_FILE = DATA_DIR / "subscribers.json"
 STATE_FILE = DATA_DIR / "state.json"
 KIOSK_NAMES_FILE = Path(__file__).parent / "kiosk_names.json"
+KIOSK_LOCATIONS_FILE = Path(__file__).parent / "kiosk_locations.json"
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -57,6 +58,7 @@ def save_json(path: Path, data):
 
 
 KIOSK_NAMES: dict[str, str] = load_json(KIOSK_NAMES_FILE, {})
+KIOSK_LOCATIONS: dict[str, str] = load_json(KIOSK_LOCATIONS_FILE, {})
 
 
 # --- API ---
@@ -125,7 +127,21 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🔔 Subscribe", callback_data="sub_menu"),
             InlineKeyboardButton("🔕 Unsubscribe", callback_data="unsub_menu"),
         ],
+        [InlineKeyboardButton("🗺️ Locations", callback_data="map")],
     ])
+
+
+def build_map_keyboard(kiosks: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    for k in sorted(kiosks, key=lambda x: x["deviceName"]):
+        code = str(k["deviceCode"])
+        url = KIOSK_LOCATIONS.get(code)
+        if not url:
+            continue
+        name = k["deviceName"].strip()
+        rows.append([InlineKeyboardButton(f"📍 {name}", url=url)])
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="back_main")])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_status_text(kiosks: list[dict]) -> str:
@@ -207,6 +223,15 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("⚠️ Failed to fetch data. Try again later.")
 
 
+async def cmd_map(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kiosks = get_kiosks_from_state()
+    await update.message.reply_text(
+        "🗺️ *Kiosk locations* — tap to open in Google Maps:",
+        parse_mode="Markdown",
+        reply_markup=build_map_keyboard(kiosks),
+    )
+
+
 async def cmd_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     kiosks = get_kiosks_from_state()
@@ -244,6 +269,15 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error("Error fetching kiosks for button status: %s", e)
             await msg.edit_text("⚠️ Failed to fetch data. Try again later.")
+
+    elif query.data == "map":
+        await query.answer()
+        kiosks = get_kiosks_from_state()
+        await query.edit_message_text(
+            "🗺️ *Kiosk locations* — tap to open in Google Maps:",
+            parse_mode="Markdown",
+            reply_markup=build_map_keyboard(kiosks),
+        )
 
     elif query.data == "back_main":
         await query.answer()
@@ -441,6 +475,7 @@ def main():
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("map", cmd_map))
     app.add_handler(CommandHandler("subscribe", cmd_subscribe))
     app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
     app.add_handler(CallbackQueryHandler(on_button))
