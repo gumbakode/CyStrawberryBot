@@ -7,7 +7,7 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -467,11 +467,26 @@ async def poll_and_notify(context: ContextTypes.DEFAULT_TYPE):
 
 # --- Entry point ---
 
+async def _set_commands(app: Application):
+    await app.bot.set_my_commands([
+        BotCommand("start", "Main menu"),
+        BotCommand("status", "Check strawberry stock"),
+        BotCommand("map", "Kiosk locations"),
+        BotCommand("subscribe", "Subscribe to restock alerts"),
+        BotCommand("unsubscribe", "Unsubscribe"),
+    ])
+
+
 def main():
     if not TELEGRAM_BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN is not set in .env file")
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .post_init(_set_commands)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
